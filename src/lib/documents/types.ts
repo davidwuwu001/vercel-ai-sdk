@@ -1,6 +1,14 @@
 import { z } from "zod";
 
-export const SUPPORTED_DOCUMENT_TYPES = ["md", "markdown", "pdf", "docx"] as const;
+export const SUPPORTED_DOCUMENT_TYPES = [
+  "md",
+  "markdown",
+  "pdf",
+  "docx",
+  "txt",
+  "csv",
+  "json",
+] as const;
 export type SupportedDocumentType = (typeof SUPPORTED_DOCUMENT_TYPES)[number];
 
 export const DocumentMetadataSchema = z.object({
@@ -9,6 +17,7 @@ export const DocumentMetadataSchema = z.object({
   mimeType: z.string(),
   documentType: z.enum(SUPPORTED_DOCUMENT_TYPES),
   pageCount: z.number().optional(),
+  rowCount: z.number().optional(),
   createdAt: z.string().optional(),
   modifiedAt: z.string().optional(),
 });
@@ -40,7 +49,7 @@ export const DocumentParseErrorSchema = z.object({
 
 export type DocumentParseError = z.infer<typeof DocumentParseErrorSchema>;
 
-export const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+export const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
 export const MIME_TYPES: Record<string, string> = {
   md: "text/markdown",
@@ -48,16 +57,19 @@ export const MIME_TYPES: Record<string, string> = {
   pdf: "application/pdf",
   docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
   doc: "application/msword",
+  txt: "text/plain",
+  csv: "text/csv",
+  json: "application/json",
 };
 
 export function getDocumentType(fileName: string): SupportedDocumentType | null {
   const ext = fileName.split(".").pop()?.toLowerCase();
   if (!ext) return null;
-  
+
   if (SUPPORTED_DOCUMENT_TYPES.includes(ext as SupportedDocumentType)) {
     return ext as SupportedDocumentType;
   }
-  
+
   return null;
 }
 
