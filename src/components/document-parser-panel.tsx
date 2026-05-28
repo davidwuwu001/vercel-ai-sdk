@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, Send, Loader2, AlertCircle, CheckCircle2, Save, Copy, FileUp } from "lucide-react";
+import { FileText, Send, Loader2, AlertCircle, CheckCircle2, Copy, FileUp } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import type { ParsedDocument, DocumentParseError } from "@/lib/documents/types";
 
@@ -78,6 +78,14 @@ export function DocumentParserPanel() {
     }
   }, [parsedDocument, viewMode]);
 
+  const sendToChat = useCallback(() => {
+    if (!parsedDocument) return;
+    const payload = encodeURIComponent(
+      `请基于以下文档内容进行总结：\n\n${parsedDocument.plainText.slice(0, 8000)}`,
+    );
+    window.location.href = `/?draft=${payload}`;
+  }, [parsedDocument]);
+
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -121,14 +129,14 @@ export function DocumentParserPanel() {
         >
           <input
             ref={fileInputRef}
-            accept=".pdf,.docx,.md,.markdown"
+            accept=".pdf,.docx,.md,.markdown,.txt,.csv,.json"
             className="hidden"
             type="file"
             onChange={handleFileSelect}
           />
           <FileUp className="app-accent mx-auto mb-3 size-12" />
           <p className="app-title text-lg font-semibold">点击上传或拖拽文件到此处</p>
-          <p className="app-muted mt-2 text-sm">支持 PDF、DOCX、Markdown 格式，最大 10MB</p>
+          <p className="app-muted mt-2 text-sm">支持 PDF、DOCX、Markdown、TXT、CSV、JSON，最大 10MB</p>
         </div>
 
         {isLoading && (
@@ -222,6 +230,16 @@ export function DocumentParserPanel() {
                   </dd>
                 </div>
               )}
+              {parsedDocument.metadata.rowCount && (
+                <div>
+                  <dt className="app-subtle font-mono text-xs uppercase tracking-wider">
+                    行数
+                  </dt>
+                  <dd className="app-title mt-1 text-sm">
+                    {parsedDocument.metadata.rowCount} 行
+                  </dd>
+                </div>
+              )}
               {parsedDocument.title && (
                 <div>
                   <dt className="app-subtle font-mono text-xs uppercase tracking-wider">
@@ -250,37 +268,34 @@ export function DocumentParserPanel() {
             <button
               className="app-button-hot flex w-full items-center justify-center gap-2 border px-4 py-3 font-mono text-sm disabled:cursor-not-allowed disabled:opacity-40"
               disabled={!parsedDocument}
+              onClick={sendToChat}
               type="button"
             >
               <Send className="size-4" />
               发送到聊天
             </button>
-            <button
-              className="app-button-accent flex w-full items-center justify-center gap-2 border px-4 py-3 font-mono text-sm disabled:cursor-not-allowed disabled:opacity-40"
-              disabled={!parsedDocument}
-              type="button"
-            >
-              <Save className="size-4" />
-              保存到知识库
-            </button>
+            <p className="app-subtle text-xs leading-5">
+              当前阶段只做文档解析与发送到聊天；暂不实现保存知识库、本地检索和 RAG。
+            </p>
           </div>
         </div>
 
         <div className="app-panel border p-5">
           <h3 className="app-title mb-4 font-semibold">支持的格式</h3>
           <ul className="space-y-2">
-            <li className="app-muted flex items-center gap-2 text-sm">
-              <span className="app-chip border px-2 py-0.5 font-mono text-xs">PDF</span>
-              Adobe PDF 文档
-            </li>
-            <li className="app-muted flex items-center gap-2 text-sm">
-              <span className="app-chip border px-2 py-0.5 font-mono text-xs">DOCX</span>
-              Word 2007+ 文档
-            </li>
-            <li className="app-muted flex items-center gap-2 text-sm">
-              <span className="app-chip border px-2 py-0.5 font-mono text-xs">MD</span>
-              Markdown 文档
-            </li>
+            {[
+              ["PDF", "Adobe PDF 文档"],
+              ["DOCX", "Word 2007+ 文档"],
+              ["MD", "Markdown 文档"],
+              ["TXT", "纯文本"],
+              ["CSV", "表格文本"],
+              ["JSON", "结构化 JSON"],
+            ].map(([tag, desc]) => (
+              <li className="app-muted flex items-center gap-2 text-sm" key={tag}>
+                <span className="app-chip border px-2 py-0.5 font-mono text-xs">{tag}</span>
+                {desc}
+              </li>
+            ))}
           </ul>
         </div>
       </div>
