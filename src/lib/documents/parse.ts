@@ -27,11 +27,55 @@ function extractTitleFromPlainText(text: string): string | undefined {
 
 async function parseMarkdown(buffer: Buffer): Promise<{ title?: string; plainText: string; markdown: string }> {
   const content = buffer.toString("utf-8");
-  const plainText = content;
-  const markdown = content;
-  const title = extractTitleFromMarkdown(content);
+  return {
+    title: extractTitleFromMarkdown(content),
+    plainText: content,
+    markdown: content,
+  };
+}
 
-  return { title, plainText, markdown };
+async function parsePlainText(buffer: Buffer, fileName: string): Promise<{ title?: string; plainText: string; markdown: string }> {
+  const content = buffer.toString("utf-8");
+  return {
+    title: extractTitleFromPlainText(content) || fileName.replace(/\.txt$/i, ""),
+    plainText: content,
+    markdown: `\`\`\`text\n${content}\n\`\`\``,
+  };
+}
+
+async function parseCsv(buffer: Buffer, fileName: string): Promise<{ title?: string; plainText: string; markdown: string; rowCount: number }> {
+  const content = buffer.toString("utf-8");
+  const rows = content.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  const markdown = rows.length
+    ? `\`\`\`csv\n${content}\n\`\`\``
+    : "";
+
+  return {
+    title: fileName.replace(/\.csv$/i, ""),
+    plainText: content,
+    markdown,
+    rowCount: rows.length,
+  };
+}
+
+async function parseJson(buffer: Buffer, fileName: string): Promise<{ title?: string; plainText: string; markdown: string }> {
+  const content = buffer.toString("utf-8");
+
+  try {
+    const parsed = JSON.parse(content) as unknown;
+    const pretty = JSON.stringify(parsed, null, 2);
+    return {
+      title: fileName.replace(/\.json$/i, ""),
+      plainText: pretty,
+      markdown: `\`\`\`json\n${pretty}\n\`\`\``,
+    };
+  } catch (error) {
+    throw createError(
+      "JSON_PARSE_ERROR",
+      "Failed to parse JSON file",
+      error instanceof Error ? error.message : "Unknown error"
+    );
+  }
 }
 
 async function parseDocx(buffer: Buffer, fileName: string): Promise<{ title?: string; plainText: string; markdown: string }> {
@@ -118,7 +162,7 @@ export async function parseDocument(
     throw createError(
       "UNSUPPORTED_FORMAT",
       `Unsupported file format: ${fileName}`,
-      `Supported formats: .md, .markdown, .pdf, .docx`
+      `Supported formats: .md, .markdown, .pdf, .docx, .txt, .csv, .json`
     );
   }
 
@@ -130,23 +174,36 @@ export async function parseDocument(
     createdAt: new Date().toISOString(),
   };
 
-  let parseResult: { title?: string; plainText: string; markdown: string; pages?: { pageNumber: number; text: string }[] };
+  let parseResult: {
+    title?: string;
+    plainText: string;
+    markdown: string;
+    pages?: { pageNumber: number; text: string }[];
+    rowCount?: number;
+  };
 
   switch (documentType) {
     case "md":
     case "markdown":
       parseResult = await parseMarkdown(buffer);
       break;
-
+    case "txt":
+      parseResult = await parsePlainText(buffer, fileName);
+      break;
+    case "csv":
+      parseResult = await parseCsv(buffer, fileName);
+      baseMetadata.rowCount = parseResult.rowCount;
+      break;
+    case "json":
+      parseResult = await parseJson(buffer, fileName);
+      break;
     case "docx":
       parseResult = await parseDocx(buffer, fileName);
       break;
-
     case "pdf":
       parseResult = await parsePdf(buffer, fileName);
       baseMetadata.pageCount = parseResult.pages?.length;
       break;
-
     default:
       throw createError(
         "UNSUPPORTED_FORMAT",
