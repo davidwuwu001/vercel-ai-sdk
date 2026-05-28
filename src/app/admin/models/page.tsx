@@ -14,6 +14,7 @@ import {
   Save,
   Sun,
   Trash2,
+  Wifi,
 } from "lucide-react";
 import Link from "next/link";
 import type { FormEvent, ReactNode } from "react";
@@ -102,6 +103,7 @@ export default function ModelAdminPage() {
   const [form, setForm] = useState<ModelFormState>(emptyForm);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
   const [message, setMessage] = useState("");
 
   const editingModel = useMemo(
@@ -202,6 +204,30 @@ export default function ModelAdminPage() {
     }
   }
 
+  async function testModelConnection() {
+    if (!editingId) {
+      setMessage("请先保存模型配置，再进行连接测试。");
+      return;
+    }
+
+    setTesting(true);
+    setMessage("正在测试模型连接...");
+    try {
+      const response = await fetch("/api/models/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modelConfigId: editingId }),
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) throw new Error(data.message || "模型连接测试失败");
+      setMessage(`连接正常 · ${data.provider}/${data.modelId} · ${data.latencyMs}ms · ${data.text}`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "模型连接测试失败");
+    } finally {
+      setTesting(false);
+    }
+  }
+
   async function deleteModel() {
     if (!editingId) return;
     if (!window.confirm("确定删除这个模型配置？")) return;
@@ -243,7 +269,7 @@ export default function ModelAdminPage() {
               模型配置管理后台
             </h1>
             <p className="app-muted mt-2 max-w-2xl text-sm leading-6">
-              配置会保存到本地 SQLite。真实 API Key 不写入数据库，只保存环境变量名。
+              配置会保存到本地 SQLite。生产环境建议只保存环境变量名；本地实验可临时保存 API Key。
             </p>
           </div>
           <div className="flex flex-col gap-2 md:items-end">
@@ -252,7 +278,6 @@ export default function ModelAdminPage() {
               onClick={toggleTheme}
               type="button"
             >
-              {/* Use CSS to show correct icon based on theme attribute */}
               <span className="theme-toggle-icon">
                 <Moon className="size-4 moon-icon" />
                 <Sun className="size-4 sun-icon" />
@@ -344,11 +369,22 @@ export default function ModelAdminPage() {
                     {editingModel?.name || "新的模型配置"}
                   </h2>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
+                  {editingId ? (
+                    <button
+                      className="app-button-accent flex h-10 items-center gap-2 border px-4 font-mono text-sm"
+                      disabled={saving || testing}
+                      onClick={() => void testModelConnection()}
+                      type="button"
+                    >
+                      <Wifi className={`size-4 ${testing ? "animate-pulse" : ""}`} />
+                      测试连接
+                    </button>
+                  ) : null}
                   {editingId ? (
                     <button
                       className="flex h-10 items-center gap-2 border border-rose-300/40 bg-rose-400/10 px-4 font-mono text-sm text-rose-100"
-                      disabled={saving}
+                      disabled={saving || testing}
                       onClick={() => void deleteModel()}
                       type="button"
                     >
@@ -358,7 +394,7 @@ export default function ModelAdminPage() {
                   ) : null}
                   <button
                     className="app-button-accent flex h-10 items-center gap-2 border px-4 font-mono text-sm"
-                    disabled={saving}
+                    disabled={saving || testing}
                     type="submit"
                   >
                     <Save className="size-4" />
@@ -373,7 +409,6 @@ export default function ModelAdminPage() {
                 </div>
               ) : null}
 
-              {/* Provider Strategy */}
               <div className="rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-4">
                 <h3 className="app-accent mb-3 flex items-center gap-2 font-mono text-xs uppercase tracking-[0.18em]">
                   <Globe className="size-4" />
@@ -524,7 +559,7 @@ export default function ModelAdminPage() {
                       />
                     </Field>
                     <Field
-                      hint="这里只填变量名，例如 VOLCENGINE_API_KEY。真实 API Key 写到项目根目录 .env.local，不要填在这里。"
+                      hint="这里只填变量名，例如 VOLCENGINE_API_KEY。真实 API Key 建议写到 .env.local。"
                       label="API Key 环境变量名"
                     >
                       <input
@@ -545,7 +580,7 @@ export default function ModelAdminPage() {
                       hint={
                         editingModel?.hasApiKey
                           ? "已保存过 API Key。留空表示不修改；输入新 Key 会覆盖；勾选清除会删除已保存 Key。"
-                          : "可以直接把这个模型的 API Key 填在这里，保存到本地 SQLite。"
+                          : "本地实验可以直接保存 API Key；生产环境建议改为只使用环境变量。"
                       }
                       label="直接保存 API Key"
                     >
