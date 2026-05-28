@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ADMIN_SESSION_COOKIE, createAdminSessionToken, isAuthConfigured, verifyAdminSessionToken } from "@/lib/auth/session";
+
+const ADMIN_SESSION_COOKIE = "neon_agent_admin";
 
 const PUBLIC_PATHS = [
   "/login",
@@ -19,7 +20,7 @@ const PROTECTED_PREFIXES = [
   "/api/documents",
 ];
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   if (PUBLIC_PATHS.some((path) => pathname === path || pathname.startsWith(`${path}/`))) {
@@ -31,7 +32,10 @@ export function middleware(request: NextRequest) {
   );
   if (!shouldProtect) return NextResponse.next();
 
-  if (!isAuthConfigured()) {
+  const adminPassword = process.env.ADMIN_PASSWORD || process.env.ADMIN_TOKEN || "";
+  const authSecret = process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET || adminPassword;
+
+  if (!adminPassword || !authSecret) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json(
         {
@@ -47,9 +51,9 @@ export function middleware(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  const token = request.cookies.get(ADMIN_SESSION_COOKIE)?.value;
-  const valid = verifyAdminSessionToken(token || createAdminSessionToken());
-  if (token && valid) return NextResponse.next();
+  const token = request.cookies.get(ADMIN_SESSION_COOKIE)?.value || "";
+  const expected = await sha256Hex(`${adminPassword}:${authSecret}`);
+  if (token && safeEqual(token, expected)) return NextResponse.next();
 
   if (pathname.startsWith("/api/")) {
     return NextResponse.json(
@@ -67,8 +71,23 @@ export function middleware(request: NextRequest) {
   return NextResponse.redirect(url);
 }
 
+async function sha256Hex(value: string) {
+  const encoder = new TextEncoder();
+  const hash = await crypto.subtle.digest("SHA-256", encoder.encode(value));
+  return Array.from(new Uint8Array(hash))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function safeEqual(a: string, b: string) {
+  if (a.length !== b.length) return false;
+  let result = 0;
+  for (let index = 0; index < a.length; index++) {
+    result |= a.charCodeAt(index) ^ b.charCodeAt(index);
+  }
+  return result === 0;
+}
+
 export const config = {
-  matcher: [
-    "/((?!_next/static|_next/image|favicon.ico).*)",
-  ],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };
