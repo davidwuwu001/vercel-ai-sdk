@@ -1,36 +1,87 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Neon Agent Lab
 
-## Getting Started
+A cyberpunk Vercel AI SDK playground for testing a lightweight company-grade AI agent architecture.
 
-First, run the development server:
+## What It Demonstrates
+
+- Next.js App Router
+- Vercel AI SDK v6 streaming chat
+- `useChat` UI message streaming
+- OpenAI-compatible provider configuration for Volcengine Ark
+- Server-side tool calling
+- Local browser session management
+- Image and document attachment entry point
+- Cyberpunk UI designed as a working app, not a landing page
+
+## Quick Start
 
 ```bash
+cp .env.example .env.local
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open `http://localhost:3000`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Open `http://localhost:3000/admin/models` to manage model configs.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Open `http://localhost:3000/lab` to view the AI SDK feature lab roadmap.
 
-## Learn More
+## Volcengine / Ark Config
 
-To learn more about Next.js, take a look at the following resources:
+Set these in `.env.local`:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+VOLCENGINE_API_KEY=your_volcengine_ark_api_key
+VOLCENGINE_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+VOLCENGINE_MODEL=your_model_or_endpoint_id
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Aliases are also supported:
 
-## Deploy on Vercel
+```bash
+ARK_API_KEY=your_volcengine_ark_api_key
+ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+ARK_MODEL=your_model_or_endpoint_id
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Local SQLite Model Admin
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Model configs are stored in a local SQLite database at `data/agent-lab.sqlite`.
+The database stores provider metadata such as Base URL, model ID, feature tags,
+and the environment variable name for the API key.
+
+Real API keys should stay in `.env.local`; do not save secrets into SQLite.
+
+The chat endpoint uses the enabled default model from the SQLite admin. If no
+model config is available, it falls back to the Volcengine / Ark env vars above.
+
+## Tool Calling
+
+Tools live in `src/lib/ai/tools.ts`.
+
+Current demo tools:
+
+- `getCurrentTime`
+- `queryOrders`
+- `searchKnowledgeBase`
+- `createAgentTaskPlan`
+
+These tools return mock data. Replace their `execute` functions with real API/database calls when connecting TangZai orders, service calendar, Feishu, or company knowledge base.
+
+## Chat API
+
+The chat endpoint is `src/app/api/chat/route.ts`.
+
+It uses:
+
+- `convertToModelMessages`
+- `streamText`
+- `stepCountIs(5)`
+- `toUIMessageStreamResponse`
+
+## Multimodal Notes
+
+The UI supports image and document attachment selection through `useChat.sendMessage({ files })`.
+
+Whether images or documents are actually understood depends on the selected model. Use a Volcengine/Ark model that supports visual or file inputs for real multimodal analysis.
