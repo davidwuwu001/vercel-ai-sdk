@@ -2,9 +2,20 @@
 
 A cyberpunk Vercel AI SDK playground for testing a lightweight company-grade AI agent architecture.
 
-## Current Version: v0.3 Scoped Business Tools + Document Parsing
+## Current Version: v0.4 Admin Security Scope
 
-This version keeps the project focused on a practical internal Agent Lab: business tool calling, durable chat, model management, and document parsing only. Local knowledge-base search, embeddings, and RAG/2AG are intentionally not implemented in this stage.
+This version focuses on admin login, basic permission protection, API access safety, business tool calling, durable chat, model management, and document parsing only. Model comparison, model test history, deployment migration, local knowledge-base search, embeddings, and RAG/2AG are intentionally not implemented in this stage.
+
+### v0.4 Completed
+
+- Admin login page at `/login`
+- Login API at `/api/auth/login`
+- Logout API at `/api/auth/logout`
+- HTTP-only admin session cookie
+- Middleware protection for app pages and sensitive APIs
+- Protected routes include `/`, `/admin/*`, `/lab/*`, `/api/chat`, `/api/chat-sessions`, `/api/models`, and `/api/documents`
+- `.env.example` with `ADMIN_PASSWORD` and `AUTH_SECRET`
+- Floating logout button in the app shell
 
 ### v0.3 Completed
 
@@ -13,8 +24,8 @@ This version keeps the project focused on a practical internal Agent Lab: busine
 - Order query tool backed by `src/lib/business/orders.ts`
 - Teacher profile query tool backed by `src/lib/business/teachers.ts`
 - Feishu record query tool backed by `src/lib/business/feishu.ts`
-- Tool outputs now include data-source status and integration hints
-- Document parser now supports PDF, DOCX, Markdown, TXT, CSV, and JSON
+- Tool outputs include data-source status and integration hints
+- Document parser supports PDF, DOCX, Markdown, TXT, CSV, and JSON
 - Document parser page is scoped to parsing + copying + sending parsed text to chat
 - Knowledge-base save, local retrieval, embeddings, and RAG are explicitly deferred
 - Model admin keeps the connectivity test action at `/api/models/test`
@@ -38,6 +49,7 @@ This version keeps the project focused on a practical internal Agent Lab: busine
 - File parsing is implemented, but document chunking, retrieval, embeddings, and RAG are not included yet
 - SQLite is intended for local/server-style development; Vercel production should use a managed database
 - API keys can be stored locally for experiments, but production should prefer environment variables or encrypted storage
+- Admin auth is basic password protection, not a full multi-user RBAC system
 
 ## What It Demonstrates
 
@@ -49,6 +61,7 @@ This version keeps the project focused on a practical internal Agent Lab: busine
 - Business-oriented tool architecture for orders, teachers, Feishu records, and time
 - SQLite-backed session and model management
 - Document parsing for common office formats
+- Basic admin auth and API access protection
 - Image and document attachment entry point
 - Cyberpunk UI designed as a working app, not a landing page
 
@@ -60,13 +73,45 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+Set at least these values in `.env.local`:
+
+```bash
+ADMIN_PASSWORD=change-me
+AUTH_SECRET=replace-with-a-long-random-secret
+```
+
+Open `http://localhost:3000/login` and sign in with `ADMIN_PASSWORD`.
+
+Open `http://localhost:3000` after login.
 
 Open `http://localhost:3000/admin/models` to manage and test model configs.
 
 Open `http://localhost:3000/lab/documents` to parse documents.
 
 Open `http://localhost:3000/lab` to view the AI SDK feature lab roadmap.
+
+## Admin Auth
+
+Admin auth is controlled by:
+
+```bash
+ADMIN_PASSWORD=your_admin_password
+AUTH_SECRET=your_long_random_secret
+```
+
+The login API creates an HTTP-only cookie named `neon_agent_admin`. Middleware checks this cookie before allowing access to protected pages and APIs.
+
+Protected route scope:
+
+- `/`
+- `/admin/*`
+- `/lab/*`
+- `/api/chat`
+- `/api/chat-sessions`
+- `/api/models`
+- `/api/documents`
+
+This is enough for local/internal prototype protection. It is not a full user-management or RBAC implementation.
 
 ## Volcengine / Ark Config
 
@@ -122,7 +167,7 @@ snapshot after generation finishes.
 
 ## Model Connectivity Test
 
-Use the test button in `/admin/models`, or call:
+Use the test button in `/admin/models`, or call after login:
 
 ```bash
 curl -X POST http://localhost:3000/api/models/test \
@@ -163,16 +208,18 @@ This stage only extracts text/markdown and document metadata. It does not save t
 
 ## Deferred
 
+- Real business database/API integration
+- Model comparison page
+- Model test history
 - Local keyword retrieval
 - Embeddings
 - RAG / 2AG
 - Knowledge-base save and query
-- Production authentication and access control
+- Multi-user RBAC
+- Production deployment migration
 
 ## Recommended Next Direction
 
-- Connect `queryOrders` to the real order database/API
-- Connect `queryTeacherProfiles` to the real teacher profile system
-- Connect `queryFeishuRecords` to Feishu Bitable APIs
-- Add model comparison page
-- Add login and production-grade access control
+- Run local build/lint and fix any type errors
+- Improve auth error display on `/login`
+- Add real business integrations only after demo workflows are stable
