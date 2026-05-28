@@ -2,9 +2,22 @@
 
 A cyberpunk Vercel AI SDK playground for testing a lightweight company-grade AI agent architecture.
 
-## Current Version: v0.2 Stability Upgrade
+## Current Version: v0.3 Scoped Business Tools + Document Parsing
 
-This version upgrades the original scaffold into a durable internal Agent Lab prototype.
+This version keeps the project focused on a practical internal Agent Lab: business tool calling, durable chat, model management, and document parsing only. Local knowledge-base search, embeddings, and RAG/2AG are intentionally not implemented in this stage.
+
+### v0.3 Completed
+
+- Business tool service layer under `src/lib/business/*`
+- Time tool backed by `src/lib/business/time.ts`
+- Order query tool backed by `src/lib/business/orders.ts`
+- Teacher profile query tool backed by `src/lib/business/teachers.ts`
+- Feishu record query tool backed by `src/lib/business/feishu.ts`
+- Tool outputs now include data-source status and integration hints
+- Document parser now supports PDF, DOCX, Markdown, TXT, CSV, and JSON
+- Document parser page is scoped to parsing + copying + sending parsed text to chat
+- Knowledge-base save, local retrieval, embeddings, and RAG are explicitly deferred
+- Model admin keeps the connectivity test action at `/api/models/test`
 
 ### v0.2 Completed
 
@@ -18,10 +31,11 @@ This version upgrades the original scaffold into a durable internal Agent Lab pr
 - Model connectivity test endpoint at `/api/models/test`
 - Model admin UI action for testing saved model configs
 
-### Still Mock / Lab Stage
+### Still Lab Stage
 
-- Demo tools still return mock data
-- File upload entry exists, but document parsing and RAG are not fully wired
+- Order, teacher, and Feishu tools use local demo data by default
+- Real API integration points are prepared via `ORDERS_API_URL`, `TEACHERS_API_URL`, `FEISHU_APP_ID`, and `FEISHU_APP_SECRET`
+- File parsing is implemented, but document chunking, retrieval, embeddings, and RAG are not included yet
 - SQLite is intended for local/server-style development; Vercel production should use a managed database
 - API keys can be stored locally for experiments, but production should prefer environment variables or encrypted storage
 
@@ -32,7 +46,9 @@ This version upgrades the original scaffold into a durable internal Agent Lab pr
 - `useChat` UI message streaming
 - OpenAI-compatible provider configuration for Volcengine Ark / Bailian / OpenAI-compatible APIs
 - Server-side tool calling
+- Business-oriented tool architecture for orders, teachers, Feishu records, and time
 - SQLite-backed session and model management
+- Document parsing for common office formats
 - Image and document attachment entry point
 - Cyberpunk UI designed as a working app, not a landing page
 
@@ -47,6 +63,8 @@ npm run dev
 Open `http://localhost:3000`.
 
 Open `http://localhost:3000/admin/models` to manage and test model configs.
+
+Open `http://localhost:3000/lab/documents` to parse documents.
 
 Open `http://localhost:3000/lab` to view the AI SDK feature lab roadmap.
 
@@ -114,29 +132,47 @@ curl -X POST http://localhost:3000/api/models/test \
 
 The endpoint returns provider, model ID, latency, usage, and a short test response.
 
-## Tool Calling
+## Business Tools
 
-Tools live in `src/lib/ai/tools.ts`.
+Tools live in `src/lib/ai/tools.ts`. Business services live in `src/lib/business`.
 
-Current demo tools:
+Current tools:
 
 - `getCurrentTime`
 - `queryOrders`
-- `searchKnowledgeBase`
+- `queryTeacherProfiles`
+- `queryFeishuRecords`
 - `createAgentTaskPlan`
 
-These tools return mock data. Replace their `execute` functions with real API/database calls when connecting TangZai orders, service calendar, Feishu, or company knowledge base.
+The business tools are structured for real integrations but currently default to demo data. Replace the relevant service implementation when connecting real TangZai orders, teacher profiles, or Feishu Bitable APIs.
 
-## Multimodal Notes
+## Document Parsing
 
-The UI supports image and document attachment selection through `useChat.sendMessage({ files })`.
+The document parser is available at `/lab/documents` and `/api/documents/parse`.
 
-Whether images or documents are actually understood depends on the selected model. Use a Volcengine/Ark model that supports visual or file inputs for real multimodal analysis.
+Supported formats:
 
-## Recommended v0.3 Direction
+- PDF
+- DOCX
+- Markdown
+- TXT
+- CSV
+- JSON
 
-- Replace mock tools with real business APIs
-- Add document parsing and chunk storage
-- Add keyword search first, then embeddings/RAG
+This stage only extracts text/markdown and document metadata. It does not save to a knowledge base and does not run retrieval or RAG.
+
+## Deferred
+
+- Local keyword retrieval
+- Embeddings
+- RAG / 2AG
+- Knowledge-base save and query
+- Production authentication and access control
+
+## Recommended Next Direction
+
+- Connect `queryOrders` to the real order database/API
+- Connect `queryTeacherProfiles` to the real teacher profile system
+- Connect `queryFeishuRecords` to Feishu Bitable APIs
 - Add model comparison page
 - Add login and production-grade access control
