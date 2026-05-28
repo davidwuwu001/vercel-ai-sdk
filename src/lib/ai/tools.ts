@@ -1,34 +1,8 @@
 import { z } from "zod";
-
-const mockOrders = [
-  {
-    id: "TZ-202605-1001",
-    studentName: "张三",
-    city: "北京",
-    teacher: "王老师",
-    status: "正常使用",
-    balanceHours: 18,
-    lastServiceAt: "2026-05-20",
-  },
-  {
-    id: "TZ-202605-1002",
-    studentName: "李想",
-    city: "上海",
-    teacher: "陈老师",
-    status: "待续费",
-    balanceHours: 2,
-    lastServiceAt: "2026-05-18",
-  },
-  {
-    id: "TZ-202605-1003",
-    studentName: "小雨",
-    city: "北京",
-    teacher: "刘老师",
-    status: "正常使用",
-    balanceHours: 36,
-    lastServiceAt: "2026-05-21",
-  },
-];
+import { queryFeishuRecords } from "@/lib/business/feishu";
+import { queryOrders } from "@/lib/business/orders";
+import { queryTeachers } from "@/lib/business/teachers";
+import { getCurrentTimeInfo } from "@/lib/business/time";
 
 export const agentTools = {
   getCurrentTime: {
@@ -37,71 +11,51 @@ export const agentTools = {
       timezone: z.string().optional().describe("IANA 时区，例如 Asia/Shanghai"),
     }),
     execute: async ({ timezone }: { timezone?: string }) => {
-      const timeZone = timezone || "Asia/Shanghai";
-      return {
-        timezone: timeZone,
-        iso: new Date().toISOString(),
-        local: new Intl.DateTimeFormat("zh-CN", {
-          dateStyle: "full",
-          timeStyle: "medium",
-          timeZone,
-        }).format(new Date()),
-      };
+      return getCurrentTimeInfo(timezone || "Asia/Shanghai");
     },
   },
+
   queryOrders: {
-    description: "按学生姓名、城市或订单状态查询演示订单数据。",
+    description:
+      "查询订单、课时余额、续费风险和服务状态。可按学生姓名、城市、订单状态、老师、风险等级筛选。",
     inputSchema: z.object({
       studentName: z.string().optional().describe("学生姓名，支持模糊匹配"),
       city: z.string().optional().describe("城市，例如北京、上海"),
-      status: z.string().optional().describe("订单状态，例如正常使用、待续费"),
+      status: z.string().optional().describe("订单状态，例如正常使用、待续费、暂停、已完结"),
+      teacher: z.string().optional().describe("负责老师姓名，支持模糊匹配"),
+      riskLevel: z.string().optional().describe("风险等级：low、medium、high"),
+      limit: z.number().int().positive().max(50).optional().describe("返回数量上限"),
     }),
-    execute: async ({
-      studentName,
-      city,
-      status,
-    }: {
-      studentName?: string;
-      city?: string;
-      status?: string;
-    }) => {
-      const orders = mockOrders.filter((order) => {
-        const matchStudent = studentName
-          ? order.studentName.includes(studentName)
-          : true;
-        const matchCity = city ? order.city === city : true;
-        const matchStatus = status ? order.status === status : true;
-        return matchStudent && matchCity && matchStatus;
-      });
+    execute: queryOrders,
+  },
 
-      return {
-        source: "mock",
-        count: orders.length,
-        orders,
-      };
-    },
-  },
-  searchKnowledgeBase: {
-    description: "检索知识库中的相关文档片段，用于回答基于上传文档的问题。",
+  queryTeacherProfiles: {
+    description:
+      "查询老师资料、能力标签、资料完整度和审核风险。适合做老师资料审核、老师匹配和服务能力摘要。",
     inputSchema: z.object({
-      query: z.string().describe("要检索的问题或关键词"),
-      enableRerank: z.boolean().optional().describe("是否启用 Rerank 重排序，默认开启"),
+      name: z.string().optional().describe("老师姓名，支持模糊匹配"),
+      city: z.string().optional().describe("城市，例如北京、上海"),
+      specialty: z.string().optional().describe("能力标签，例如专注力、情绪管理、社交能力"),
+      status: z.string().optional().describe("老师状态，例如可排课、资料待完善、暂停服务"),
+      riskLevel: z.string().optional().describe("风险等级：low、medium、high"),
+      limit: z.number().int().positive().max(50).optional().describe("返回数量上限"),
     }),
-    execute: async ({ 
-      query, 
-    }: { 
-      query: string; 
-      enableRerank?: boolean;
-    }) => {
-      // 返回 mock 数据，实际检索功能在 /lab/knowledge 页面
-      return {
-        source: "knowledge_base",
-        query,
-        results: [],
-        message: "知识库功能正在开发中，请先在知识库页面上传文档。",
-      };
-    },
+    execute: queryTeachers,
   },
+
+  queryFeishuRecords: {
+    description:
+      "查询飞书多维表/业务表记录。当前提供可替换的飞书数据源骨架，适合查服务确认单、老师审核、订单跟进等记录。",
+    inputSchema: z.object({
+      keyword: z.string().optional().describe("关键词，匹配标题或字段内容"),
+      table: z.string().optional().describe("表名，例如家长服务确认单、老师资料审核、订单跟进表"),
+      status: z.string().optional().describe("状态，例如待家长确认、待补充材料、待跟进"),
+      owner: z.string().optional().describe("负责人或老师姓名，支持模糊匹配"),
+      limit: z.number().int().positive().max(50).optional().describe("返回数量上限"),
+    }),
+    execute: queryFeishuRecords,
+  },
+
   createAgentTaskPlan: {
     description: "把用户目标拆成 Agent 任务计划，展示 Skill 与 Tool 的协作方式。",
     inputSchema: z.object({
@@ -123,9 +77,9 @@ export const agentTools = {
         requiresHumanApproval: riskLevel !== "low",
         steps: [
           "识别目标和业务对象",
-          "选择合适的 Skill",
+          "选择合适的业务工具：时间 / 订单 / 老师资料 / 飞书记录",
           "调用查询类 Tool 收集上下文",
-          "生成草稿或分析结果",
+          "生成草稿、摘要或检查清单",
           riskLevel === "low" ? "直接返回结果" : "等待人工确认后再执行写入动作",
         ],
       };
