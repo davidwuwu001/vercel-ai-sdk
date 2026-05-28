@@ -22,9 +22,6 @@ export interface ChatMessageRow {
   created_at: string;
 }
 
-/**
- * 创建新会话
- */
 export function createSession(id: string, modelConfigId?: number): ChatSessionRow {
   const db = getDb();
   db.prepare(`
@@ -32,49 +29,39 @@ export function createSession(id: string, modelConfigId?: number): ChatSessionRo
     VALUES (?, ?, ?)
   `).run(id, modelConfigId ?? null, "Untitled");
 
-  const row = db.prepare("SELECT * FROM chat_sessions WHERE id = ?").get(id) as ChatSessionRow;
-  return row;
+  return getSession(id) as ChatSessionRow;
 }
 
-/**
- * 获取会话
- */
+export function ensureSession(id: string, modelConfigId?: number): ChatSessionRow {
+  const existing = getSession(id);
+  if (existing) return existing;
+  return createSession(id, modelConfigId);
+}
+
 export function getSession(sessionId: string): ChatSessionRow | null {
   const db = getDb();
   return db.prepare("SELECT * FROM chat_sessions WHERE id = ?").get(sessionId) as ChatSessionRow | null;
 }
 
-/**
- * 更新会话标题
- */
 export function updateSessionTitle(sessionId: string, title: string): void {
   const db = getDb();
   db.prepare(`
     UPDATE chat_sessions SET title = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
-  `).run(title, sessionId);
+  `).run(title.trim() || "Untitled", sessionId);
 }
 
-/**
- * 更新会话模型
- */
-export function updateSessionModel(sessionId: string, modelConfigId: number): void {
+export function updateSessionModel(sessionId: string, modelConfigId: number | null): void {
   const db = getDb();
   db.prepare(`
     UPDATE chat_sessions SET model_config_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?
   `).run(modelConfigId, sessionId);
 }
 
-/**
- * 删除会话
- */
 export function deleteSession(sessionId: string): void {
   const db = getDb();
   db.prepare("DELETE FROM chat_sessions WHERE id = ?").run(sessionId);
 }
 
-/**
- * 获取最近会话列表
- */
 export function listRecentSessions(limit = 20): ChatSessionRow[] {
   const db = getDb();
   return db.prepare(`
@@ -84,9 +71,6 @@ export function listRecentSessions(limit = 20): ChatSessionRow[] {
   `).all(limit) as ChatSessionRow[];
 }
 
-/**
- * 保存消息
- */
 export function saveMessage(
   id: string,
   sessionId: string,
@@ -97,59 +81,98 @@ export function saveMessage(
   db.prepare(`
     INSERT INTO chat_messages (id, session_id, role, parts)
     VALUES (?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      role = excluded.role,
+      parts = excluded.parts
   `).run(id, sessionId, role, JSON.stringify(parts));
 
-  // 更新会话时间
-  db.prepare(`
-    UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?
-  `).run(sessionId);
-
+  touchSession(sessionId);
   return db.prepare("SELECT * FROM chat_messages WHERE id = ?").get(id) as ChatMessageRow;
 }
 
-/**
- * 获取会话的所有消息
- */
+export function replaceSessionMessages(sessionId: string, messages: UIMessage[]): void {
+  const db = getDb();
+  const replace = db.transaction(() => {
+    ensureSession(sessionId);
+    db.prepare("DELETE FROM chat_messages WHERE session_id = ?").run(sessionId);
+
+    const insert = db.prepare(`
+      INSERT INTO chat_messages (id, session_id, role, parts)
+      VALUES (?, ?, ?, ?)
+    `);
+
+    for (const message of messages) {
+      insert.run(
+        message.id || `msg-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        sessionId,
+        normalizeRole(message.role),
+        JSON.stringify(message.parts || [])
+      );
+    }
+
+    const title = titleFromMessages(messages);
+    if (title) updateSessionTitle(sessionId, title);
+    touchSession(sessionId);
+  });
+
+  replace();
+}
+
 export function getSessionMessages(sessionId: string): ChatMessageRow[] {
   const db = getDb();
   return db.prepare(`
     SELECT * FROM chat_messages
     WHERE session_id = ?
-    ORDER BY created_at ASC
+    ORDER BY created_at ASC, rowid ASC
   `).all(sessionId) as ChatMessageRow[];
 }
 
-/**
- * 将消息行转换为 UIMessage
- */
 export function rowToMessage(row: ChatMessageRow): UIMessage {
-  // 过滤掉 tool 角色的消息，因为 UIMessage 不支持 tool 角色
-  if (row.role === "tool") {
-    return {
-      id: row.id,
-      role: "assistant" as const,
-      parts: JSON.parse(row.parts) as UIMessage["parts"],
-    };
-  }
+  const role = row.role === "tool" ? "assistant" : row.role;
   return {
     id: row.id,
-    role: row.role as "user" | "system" | "assistant",
-    parts: JSON.parse(row.parts) as UIMessage["parts"],
+    role: role as "user" | "system" | "assistant",
+    parts: safeParseParts(row.parts),
   };
 }
 
-/**
- * 删除消息
- */
 export function deleteMessage(messageId: string): void {
   const db = getDb();
   db.prepare("DELETE FROM chat_messages WHERE id = ?").run(messageId);
 }
 
-/**
- * 清空会话消息
- */
 export function clearSessionMessages(sessionId: string): void {
   const db = getDb();
   db.prepare("DELETE FROM chat_messages WHERE session_id = ?").run(sessionId);
+  updateSessionTitle(sessionId, "Untitled");
+  touchSession(sessionId);
+}
+
+function normalizeRole(role: UIMessage["role"] | string): "user" | "assistant" | "system" | "tool" {
+  if (role === "user" || role === "assistant" || role === "system" || role === "tool") {
+    return role;
+  }
+  return "assistant";
+}
+
+function touchSession(sessionId: string): void {
+  getDb()
+    .prepare("UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?")
+    .run(sessionId);
+}
+
+function safeParseParts(parts: string): UIMessage["parts"] {
+  try {
+    const parsed = JSON.parse(parts) as UIMessage["parts"];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function titleFromMessages(messages: UIMessage[]) {
+  const firstUser = messages.find((message) => message.role === "user");
+  const text = firstUser?.parts?.find((part) => part.type === "text");
+  if (!text || text.type !== "text") return "";
+  return text.text.slice(0, 32) || "";
 }
