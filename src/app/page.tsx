@@ -6,10 +6,12 @@ import {
   Bot,
   BrainCircuit,
   DatabaseZap,
+  Eraser,
   FileUp,
   MessageSquarePlus,
   Moon,
   Orbit,
+  Pencil,
   Play,
   RadioTower,
   Search,
@@ -38,6 +40,7 @@ type ChatSession = {
   title: string;
   createdAt: number;
   updatedAt?: number;
+  modelConfigId?: number | null;
   messages: UIMessage[];
 };
 
@@ -49,6 +52,14 @@ type ModelOption = {
   enabled: boolean;
   isDefault: boolean;
   hasApiKey: boolean;
+};
+
+type SessionPayload = {
+  id: string;
+  title: string;
+  modelConfigId?: number | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 const STORAGE_KEY = "neon-agent-lab:preferences";
@@ -80,10 +91,46 @@ export default function Home() {
   const [sessions, setSessions] = useState<ChatSession[]>([initialSession]);
   const [activeId, setActiveId] = useState(initialSession.id);
   const [storageReady, setStorageReady] = useState(false);
+  const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeId) || sessions[0],
     [activeId, sessions],
   );
+
+  const applySessionDetail = useCallback((payload: {
+    session?: SessionPayload | null;
+    messages?: UIMessage[];
+  }) => {
+    if (!payload.session) return;
+    const next = sessionFromPayload(payload.session, payload.messages || []);
+    setSessions((current) => {
+      const exists = current.some((session) => session.id === next.id);
+      if (!exists) return [next, ...current];
+      return current.map((session) =>
+        session.id === next.id
+          ? {
+              ...session,
+              ...next,
+              messages: payload.messages || session.messages,
+            }
+          : session,
+      );
+    });
+  }, []);
+
+  const loadSessionDetail = useCallback(async (id: string) => {
+    setLoadingSessionId(id);
+    try {
+      const response = await fetch(`/api/chat-sessions/${id}`);
+      if (!response.ok) return;
+      const data = await response.json();
+      if (data.success) applySessionDetail(data);
+    } catch {
+      // localStorage fallback already keeps the last known messages.
+    } finally {
+      setLoadingSessionId((current) => (current === id ? null : current));
+    }
+  }, [applySessionDetail]);
 
   const loadFromLocalStorage = useCallback(() => {
     const stored = window.localStorage.getItem(STORAGE_KEY);
@@ -109,7 +156,6 @@ export default function Home() {
     }
   }, []);
 
-  // 从 API 加载会话列表
   useEffect(() => {
     async function loadSessions() {
       try {
@@ -117,37 +163,30 @@ export default function Home() {
         if (response.ok) {
           const data = await response.json();
           if (data.success && data.sessions?.length > 0) {
-            const loadedSessions: ChatSession[] = data.sessions.map((s: { id: string; title: string; createdAt: string; updatedAt: string }) => ({
-              id: s.id,
-              title: s.title,
-              createdAt: new Date(s.createdAt).getTime(),
-              updatedAt: new Date(s.updatedAt).getTime(),
-              messages: [],
-            }));
+            const loadedSessions: ChatSession[] = data.sessions.map((session: SessionPayload) =>
+              sessionFromPayload(session, []),
+            );
             setSessions(loadedSessions);
             setActiveId(loadedSessions[0].id);
             setStorageReady(true);
+            void loadSessionDetail(loadedSessions[0].id);
           } else {
-            // 没有会话，创建一个新的
-            const first = createSession();
+            const first = await createNewSessionOnServer();
             setSessions([first]);
             setActiveId(first.id);
             setStorageReady(true);
           }
         } else {
-          // API 不可用，使用 localStorage
           loadFromLocalStorage();
         }
       } catch {
-        // API 不可用，使用 localStorage
         loadFromLocalStorage();
       }
     }
 
     loadSessions();
-  }, [loadFromLocalStorage]);
+  }, [loadFromLocalStorage, loadSessionDetail]);
 
-  // 保存到 localStorage 作为备份
   useEffect(() => {
     if (!storageReady) return;
     const timer = window.setTimeout(() => {
@@ -161,43 +200,75 @@ export default function Home() {
   }, [sessions, storageReady]);
 
   async function createNewSession() {
-    const session = createSession();
-    
-    // 尝试通过 API 创建
-    try {
-      const response = await fetch("/api/chat-sessions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: session.id }),
-      });
-      if (response.ok) {
-        const data = await response.json();
-        if (data.success && data.session) {
-          session.createdAt = new Date(data.session.createdAt).getTime();
-        }
-      }
-    } catch {
-      // API 不可用，继续使用本地创建
-    }
-    
+    const session = await createNewSessionOnServer();
     setSessions((current) => [session, ...current]);
     setActiveId(session.id);
   }
 
-  async function deleteSession(id: string) {
-    // 尝试通过 API 删除
+  async function selectSession(id: string) {
+    setActiveId(id);
+    const session = sessions.find((item) => item.id === id);
+    if (!session || session.messages.length === 0) {
+      await loadSessionDetail(id);
+    }
+  }
+
+  async function deleteCurrentSession(id: string) {
+    const confirmed = window.confirm("确定删除这个会话吗？这会同时删除该会话的历史消息。");
+    if (!confirmed) return;
+
     try {
       await fetch(`/api/chat-sessions/${id}`, { method: "DELETE" });
     } catch {
-      // API 不可用，继续本地删除
+      // Continue local deletion.
     }
-    
+
     setSessions((current) => {
       const rest = current.filter((session) => session.id !== id);
       const next = rest.length ? rest : [createSession()];
       if (id === activeId) setActiveId(next[0].id);
       return next;
     });
+  }
+
+  async function clearActiveMessages() {
+    if (!activeSession) return;
+    const confirmed = window.confirm("确定清空当前会话消息吗？会话本身会保留。");
+    if (!confirmed) return;
+
+    try {
+      await fetch(`/api/chat-sessions/${activeSession.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clearMessages: true }),
+      });
+    } catch {
+      // Continue local clear.
+    }
+
+    updateSessionMessages(activeSession.id, []);
+  }
+
+  async function renameSession(id: string) {
+    const current = sessions.find((session) => session.id === id);
+    const nextTitle = window.prompt("请输入新的会话标题", current?.title || "Untitled");
+    if (!nextTitle) return;
+
+    try {
+      await fetch(`/api/chat-sessions/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: nextTitle }),
+      });
+    } catch {
+      // Continue local rename.
+    }
+
+    setSessions((currentSessions) =>
+      currentSessions.map((session) =>
+        session.id === id ? { ...session, title: nextTitle.trim() || "Untitled" } : session,
+      ),
+    );
   }
 
   function clearLocalSessions() {
@@ -215,7 +286,6 @@ export default function Home() {
     setSessions((current) =>
       current.map((session) => {
         if (session.id !== id) return session;
-        if (session.messages === messages) return session;
         return {
           ...session,
           title: titleFromMessages(messages) || session.title,
@@ -224,6 +294,27 @@ export default function Home() {
       }),
     );
   }, []);
+
+  const syncSessionMessages = useCallback(async function syncSessionMessages(
+    id: string,
+    messages: UIMessage[],
+    modelConfigId?: number | null,
+  ) {
+    updateSessionMessages(id, messages);
+    try {
+      const response = await fetch(`/api/chat-sessions/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages, modelConfigId }),
+      });
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) applySessionDetail(data);
+      }
+    } catch {
+      // localStorage remains a backup when the API is unavailable.
+    }
+  }, [applySessionDetail, updateSessionMessages]);
 
   return (
     <main className="app-shell h-screen h-dvh overflow-hidden">
@@ -274,12 +365,20 @@ export default function Home() {
                 onClick={toggleTheme}
                 type="button"
               >
-                {/* Use CSS to show correct icon based on theme attribute */}
                 <span className="theme-toggle-icon">
                   <Moon className="size-4 moon-icon" />
                   <Sun className="size-4 sun-icon" />
                 </span>
                 <span suppressHydrationWarning>{theme === "day" ? "夜间" : "白天"}</span>
+              </button>
+
+              <button
+                className="app-panel-soft col-span-2 flex h-9 items-center justify-center gap-1 border px-2 font-mono text-[11px] sm:col-span-1 lg:mb-3 lg:h-10 lg:gap-2 lg:px-4 lg:text-xs"
+                onClick={clearActiveMessages}
+                type="button"
+              >
+                <Eraser className="size-4" />
+                清当前
               </button>
 
               <button
@@ -310,34 +409,49 @@ export default function Home() {
             <div className="flex min-h-0 gap-2 overflow-x-auto lg:flex-1 lg:flex-col lg:space-y-2 lg:overflow-x-hidden lg:overflow-y-auto lg:pb-1 lg:pr-1">
               {sessions.map((session) => (
                 <button
-                  className={`group flex min-w-32 items-start justify-between border px-3 py-2 text-left lg:w-full lg:min-w-0 lg:py-3 ${
+                  className={`group flex min-w-40 items-start justify-between border px-3 py-2 text-left lg:w-full lg:min-w-0 lg:py-3 ${
                     session.id === activeSession.id
                       ? "app-card-active"
                       : "app-card"
                   }`}
                   key={session.id}
-                  onClick={() => setActiveId(session.id)}
+                  onClick={() => void selectSession(session.id)}
                 >
                   <span className="min-w-0">
                     <span className="app-title block truncate text-xs lg:text-sm">
                       {session.title}
                     </span>
                     <span className="app-subtle mt-1 hidden font-mono text-[11px] sm:block">
-                      {session.createdAt
-                        ? new Date(session.createdAt).toLocaleString("zh-CN")
-                        : "local draft"}
+                      {loadingSessionId === session.id
+                        ? "loading..."
+                        : session.createdAt
+                          ? new Date(session.createdAt).toLocaleString("zh-CN")
+                          : "local draft"}
                     </span>
                   </span>
-                  <span
-                    className="app-subtle ml-2 grid size-7 place-items-center opacity-0 transition hover:text-rose-500 group-hover:opacity-100"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      deleteSession(session.id);
-                    }}
-                    role="button"
-                    tabIndex={0}
-                  >
-                    <Trash2 className="size-4" />
+                  <span className="ml-2 flex shrink-0 items-center gap-1 opacity-0 transition group-hover:opacity-100">
+                    <span
+                      className="app-subtle grid size-7 place-items-center hover:text-cyan-200"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void renameSession(session.id);
+                      }}
+                      role="button"
+                      tabIndex={0}
+                    >
+                      <Pencil className="size-3.5" />
+                    </span>
+                    <span
+                      className="app-subtle grid size-7 place-items-center hover:text-rose-500"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void deleteCurrentSession(session.id);
+                      }}
+                      role="button"
+                      tabIndex={0}
+                    >
+                      <Trash2 className="size-4" />
+                    </span>
                   </span>
                 </button>
               ))}
@@ -349,7 +463,7 @@ export default function Home() {
           <ChatPanel
             key={activeSession.id}
             session={activeSession}
-            onMessagesChange={updateSessionMessages}
+            onMessagesChange={syncSessionMessages}
           />
         ) : null}
       </div>
@@ -362,12 +476,12 @@ function ChatPanel({
   onMessagesChange,
 }: {
   session: ChatSession;
-  onMessagesChange: (id: string, messages: UIMessage[]) => void;
+  onMessagesChange: (id: string, messages: UIMessage[], modelConfigId?: number | null) => void | Promise<void>;
 }) {
   const [input, setInput] = useState("");
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [modelOptions, setModelOptions] = useState<ModelOption[]>([]);
-  const [selectedModelId, setSelectedModelId] = useState<number | null>(null);
+  const [selectedModelId, setSelectedModelId] = useState<number | null>(session.modelConfigId || null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const { messages, sendMessage, status, stop, regenerate, error, clearError } =
@@ -376,7 +490,7 @@ function ChatPanel({
       messages: session.messages,
       experimental_throttle: 120,
       onFinish: ({ messages: finishedMessages }) => {
-        onMessagesChange(session.id, finishedMessages);
+        void onMessagesChange(session.id, finishedMessages, selectedModelId);
       },
     });
   const isRunning = status === "submitted" || status === "streaming";
@@ -396,6 +510,7 @@ function ChatPanel({
         }
 
         return (
+          enabledModels.find((model) => model.id === session.modelConfigId)?.id ||
           enabledModels.find((model) => model.isDefault)?.id ||
           enabledModels[0]?.id ||
           null
@@ -404,7 +519,7 @@ function ChatPanel({
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [session.modelConfigId]);
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -427,6 +542,7 @@ function ChatPanel({
       files: files?.length ? files : undefined,
     }, {
       body: {
+        sessionId: session.id,
         modelConfigId: selectedModelId ?? undefined,
       },
     });
@@ -479,7 +595,7 @@ function ChatPanel({
               </div>
               <p className="app-muted max-w-2xl text-sm leading-7">
                 后端通过 Vercel AI SDK 连接火山引擎 OpenAI-compatible
-                接口，支持流式输出、工具调用循环、附件输入入口和本地会话保存。工具现在接的是
+                接口，支持流式输出、工具调用循环、附件输入入口和 SQLite 会话持久化。工具现在接的是
                 mock 数据，后续可以替换成汤仔助手订单、服务日历、飞书和知识库 API。
               </p>
               <div className="mt-6 grid gap-3 sm:grid-cols-2">
@@ -651,6 +767,7 @@ function ChatPanel({
               onClick={() =>
                 void regenerate({
                   body: {
+                    sessionId: session.id,
                     modelConfigId: selectedModelId ?? undefined,
                   },
                 })
@@ -668,8 +785,6 @@ function ChatPanel({
 
 function MessageBubble({ message }: { message: UIMessage }) {
   const isUser = message.role === "user";
-
-  // 计算工具调用步骤
   const toolSteps = message.parts
     .map((part, idx) => (part.type.startsWith("tool-") ? idx + 1 : -1))
     .filter((idx) => idx !== -1);
@@ -791,6 +906,26 @@ function ToolPartView({ part, step }: { part: UIMessage["parts"][number]; step?:
   );
 }
 
+async function createNewSessionOnServer(): Promise<ChatSession> {
+  const draft = createSession();
+  try {
+    const response = await fetch("/api/chat-sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: draft.id }),
+    });
+    if (response.ok) {
+      const data = await response.json();
+      if (data.success && data.session) {
+        return sessionFromPayload(data.session, []);
+      }
+    }
+  } catch {
+    // API unavailable; use local draft.
+  }
+  return draft;
+}
+
 function createSession(): ChatSession {
   const now = Date.now();
   return {
@@ -798,6 +933,17 @@ function createSession(): ChatSession {
     title: "Untitled agent session",
     createdAt: now,
     messages: [],
+  };
+}
+
+function sessionFromPayload(payload: SessionPayload, messages: UIMessage[]): ChatSession {
+  return {
+    id: payload.id,
+    title: payload.title || "Untitled",
+    createdAt: new Date(payload.createdAt).getTime(),
+    updatedAt: new Date(payload.updatedAt).getTime(),
+    modelConfigId: payload.modelConfigId ?? null,
+    messages,
   };
 }
 
