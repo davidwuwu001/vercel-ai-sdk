@@ -13,14 +13,12 @@ import {
   logError,
   convertUsage,
 } from "@/lib/observability/log-run";
-import { getEnabledModelConfigById } from "@/lib/models";
+import { ensureSession, replaceSessionMessages, updateSessionModel } from "@/lib/chat-store";
+import { getDefaultModelConfig, getEnabledModelConfigById } from "@/lib/models";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-/**
- * 从 UIMessage 中检测是否包含图片附件
- */
 function detectImageAttachments(messages: UIMessage[]): {
   hasImages: boolean;
   imageCount: number;
@@ -36,7 +34,6 @@ function detectImageAttachments(messages: UIMessage[]): {
 
     if (parts) {
       for (const part of parts) {
-        // 检查文件类型中的图片 (Vercel AI SDK v3 格式)
         if (part.type === "file") {
           const filePart = part as { mediaType?: string };
           if (filePart.mediaType?.startsWith("image/")) {
@@ -54,15 +51,11 @@ function detectImageAttachments(messages: UIMessage[]): {
   return { hasImages, imageCount, firstImagePosition };
 }
 
-/**
- * 检查消息中的图片格式是否与模型兼容
- */
 function validateImageFormats(
   messages: UIMessage[]
 ): { valid: boolean; errors: string[] } {
   const errors: string[] = [];
 
-  // 检查消息中的图片部分
   for (const message of messages) {
     if (message.parts) {
       for (const part of message.parts) {
@@ -83,14 +76,11 @@ function validateImageFormats(
 
 export async function POST(req: Request) {
   let runId: number | null = null;
+  let sessionId: string | undefined;
 
   try {
-    // 验证请求体
     if (!req.body) {
-      return Response.json(
-        { error: "invalid_request", message: "请求体不能为空" },
-        { status: 400 }
-      );
+      return jsonError("invalid_request", "请求体不能为空", 400);
     }
 
     const body = await req.json();
@@ -98,27 +88,27 @@ export async function POST(req: Request) {
       messages,
       modelConfigId,
     }: { messages: UIMessage[]; modelConfigId?: number } = body;
+    sessionId = typeof body.sessionId === "string" ? body.sessionId : undefined;
 
-    // 验证 messages
     if (!Array.isArray(messages)) {
-      return Response.json(
-        { error: "invalid_messages", message: "messages 必须是数组" },
-        { status: 400 }
-      );
+      return jsonError("invalid_messages", "messages 必须是数组", 400);
     }
 
-    // 获取模型配置信息用于日志
     const modelConfig = modelConfigId
       ? getEnabledModelConfigById(modelConfigId)
-      : null;
+      : getDefaultModelConfig();
 
-    // 检测消息中是否包含图片
+    if (sessionId) {
+      ensureSession(sessionId, modelConfig?.id);
+      if (modelConfig?.id) updateSessionModel(sessionId, modelConfig.id);
+      replaceSessionMessages(sessionId, messages);
+    }
+
     const imageDetection = detectImageAttachments(messages);
-    const modelId = modelConfig?.modelId || "default";
+    const modelId = modelConfig?.modelId || process.env.VOLCENGINE_MODEL || process.env.ARK_MODEL || "default";
 
-    // 如果有图片，检查模型是否支持视觉
     if (imageDetection.hasImages) {
-      const visionCheck = checkVisionSupport(modelConfigId);
+      const visionCheck = checkVisionSupport(modelConfig?.id);
 
       if (!visionCheck.supported) {
         return Response.json(
@@ -138,28 +128,21 @@ export async function POST(req: Request) {
         );
       }
 
-      // 验证图片格式
       const formatValidation = validateImageFormats(messages);
       if (!formatValidation.valid) {
-        return Response.json(
-          {
-            error: "invalid_image_format",
-            message: formatValidation.errors.join("; "),
-          },
-          { status: 400 }
-        );
+        return jsonError("invalid_image_format", formatValidation.errors.join("; "), 400);
       }
     }
 
-    // 启动日志记录
     runId = startRun("/api/chat", {
-      modelConfigId: modelConfigId,
+      modelConfigId: modelConfig?.id || modelConfigId,
       provider: modelConfig?.provider || "unknown",
-      modelId: modelId,
+      modelId,
       attachmentCount: imageDetection.imageCount,
       metadata: {
         messageCount: messages.length,
         hasImages: imageDetection.hasImages,
+        sessionId,
       },
     });
 
@@ -168,7 +151,7 @@ export async function POST(req: Request) {
     });
 
     const result = streamText({
-      model: getChatModel(modelConfigId),
+      model: getChatModel(modelConfig?.id || modelConfigId),
       system: systemPrompt,
       messages: modelMessages,
       tools: agentTools,
@@ -182,6 +165,10 @@ export async function POST(req: Request) {
             toolCallCount: finishEvent.toolCalls?.length || 0,
           });
         }
+
+        if (sessionId && finishEvent.response.messages.length) {
+          replaceSessionMessages(sessionId, finishEvent.response.messages as UIMessage[]);
+        }
       },
     });
 
@@ -191,18 +178,33 @@ export async function POST(req: Request) {
       logError(runId, error);
     }
 
-    // 添加详细错误日志以便调试
     console.error("[POST /api/chat] Error:", error);
     if (error instanceof Error) {
       console.error("[POST /api/chat] Stack:", error.stack);
     }
 
-    const message =
-      error instanceof Error ? error.message : "AI request failed unexpectedly.";
-
-    return Response.json(
-      { message, error: "internal_error" },
-      { status: 500 }
-    );
+    return jsonError("internal_error", formatChatError(error), 500);
   }
+}
+
+function jsonError(error: string, message: string, status: number) {
+  return Response.json({ message, error }, { status });
+}
+
+function formatChatError(error: unknown) {
+  const message = error instanceof Error ? error.message : "AI request failed unexpectedly.";
+
+  if (message.includes("Missing API key")) {
+    return `${message} 请检查 .env.local 或模型管理后台中的 API Key 配置。`;
+  }
+
+  if (message.includes("No model configuration")) {
+    return "没有可用模型配置。请先到模型管理后台启用一个模型，或配置 VOLCENGINE_API_KEY / ARK_API_KEY 等环境变量。";
+  }
+
+  if (message.includes("Selected model is disabled")) {
+    return "当前选择的模型不存在或已禁用。请切换模型后重试。";
+  }
+
+  return message;
 }
